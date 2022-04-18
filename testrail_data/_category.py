@@ -52,8 +52,10 @@ class Plans(TR_Plans):
     def to_dataframe(self, project_id: int, **kwargs) -> DataFrame:
         return DataFrame(self.get_plans(project_id, **kwargs))
 
+
 class Cases(TR_Cases):
     pass
+
 
 class Milestones(TR_Milestone):
 

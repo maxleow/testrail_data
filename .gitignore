@@ -1,3 +1,6 @@
 main.py
 .idea
 __pycache__
+dist
+testrail_data.egg-info
+.pytest_cache
