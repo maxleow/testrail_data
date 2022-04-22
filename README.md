@@ -4,17 +4,14 @@
 
 ## What is it?
 
----
 This is a wrapper of [Testrail Api](https://github.com/tolstislon/testrail-api) with [pandas](https://github.com/pandas-dev/pandas) DataFrame extended. Especially when you are working on huge data-set, say years of results, this is a handly library. 
 
 ## Installation
 
----
 `pip install testrail-data`
 
 ## Main Features
 
----
 - Transform pulled data into DataFrame object, covering:
   - Case
   - Case Fields
@@ -39,6 +36,7 @@ This is a wrapper of [Testrail Api](https://github.com/tolstislon/testrail-api) 
   - Result (in comming version)
 
 ### Example usage with DataFrame
+
 ```python
 from testrail_data import TestRailAPI
 
@@ -58,7 +56,9 @@ df_run.info()
 # Pulling all Run by Plan
 df_run = api.runs.dataframe_from_plan(plan_id=3)
 ```
+
 ### Example usage with Meta data
+
 ```python
 # continue ...
 
