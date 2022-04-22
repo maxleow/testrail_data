@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import pytest
+
 from testrail_data import TestRailAPI
 
 BASE_HOST = 'https://example.testrail.com/index.php?/api/v2/'
