@@ -1,7 +1,5 @@
 # Testrail Data: a handy Testrail data analysis tool
 
----
-
 ## What is it?
 
 This is a wrapper of [Testrail Api](https://github.com/tolstislon/testrail-api) with [pandas](https://github.com/pandas-dev/pandas) DataFrame extended. Especially when you are working on huge data-set, say years of results, this is a handly library. 
