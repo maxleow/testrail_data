@@ -1,4 +1,10 @@
 # Testrail Data: a handy Testrail data analysis tool
+[![Python package][gh-action-python-package-badge]][gh-action-python-package]
+[![PyPI][pypi-latest-release-badge]][pypi]
+[![Downloads][pepy-downloads-badge]][pepy-downloads-link]
+[![PyPI - Python Version][pypi-python-versions-badge]][pypi]
+[![PyPI - Implementation][pypi-implementations-badge]][pypi]
+[![License][license-badge]][license-link]
 
 ## What is it?
 
@@ -31,7 +37,7 @@ This is a wrapper of [Testrail Api](https://github.com/tolstislon/testrail-api) 
 - Meta data filling option to all IDs in:
   - Case
   - Test
-  - Result (in comming version)
+  - Result (not in this version)
 
 ### Example usage with DataFrame
 
@@ -66,3 +72,14 @@ df_case = api.cases.to_dataframe(project_id=1, suite_id=2, with_meta=True)
 # all custom_columns are replaced with meta data.
 
 ```
+
+[gh-action-python-package]: https://github.com/maxleow/testrail_data/actions/workflows/python-package.yml
+[gh-action-python-package-badge]: https://github.com/maxleow/testrail_data/actions/workflows/python-package.yml/badge.svg
+[license-badge]: https://img.shields.io/badge/License-MIT-blue.svg
+[license-link]: https://github.com/maxleow/testrail_data/blob/main/LICENSE
+[pypi]: https://pypi.org/project/testrail-data/
+[pypi-latest-release-badge]: https://img.shields.io/pypi/v/testrail-data?color=blue&label=pypi&logo=version
+[pypi-implementations-badge]: https://img.shields.io/pypi/implementation/testrail-data-model
+[pypi-python-versions-badge]: https://img.shields.io/pypi/pyversions/testrail-data.svg
+[pepy-downloads-badge]: https://static.pepy.tech/personalized-badge/testrail-data?period=total&units=international_system&left_color=gray&right_color=blue&left_text=Downloads
+[pepy-downloads-link]: https://pepy.tech/project/testrail-data
