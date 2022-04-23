@@ -12,7 +12,9 @@ This is a wrapper of [Testrail Api](https://github.com/tolstislon/testrail-api) 
 
 ## Installation
 
-`pip install testrail-data`
+```shell
+pip install testrail-data
+```
 
 ## Main Features
 
@@ -30,7 +32,7 @@ This is a wrapper of [Testrail Api](https://github.com/tolstislon/testrail-api) 
   - Statuses
   - Template
   - Test
-- Complete pull with auto-offset cabability to walk through all pages, avalaible to:
+- Complete pull with `auto-offset` capability to walk through all pagination, avalaible to:
   - Run
   - Result
   - Plan
