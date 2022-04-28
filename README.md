@@ -40,6 +40,9 @@ pip install testrail-data
   - Case
   - Test
   - Result (not in this version)
+- Retry pulling when `ConnectionError` occurred in:
+  - Results
+    - get_results_for_run
 
 ### Example usage with DataFrame
 
