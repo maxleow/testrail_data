@@ -1,3 +1,4 @@
+import time
 from testrail_api._category import Runs as TR_Runs
 from testrail_api._category import Plans as TR_Plans
 from testrail_api._category import Results as TR_Results
@@ -11,32 +12,60 @@ from testrail_api._category import CaseTypes as TR_CaseType
 from testrail_api._category import Priorities as TR_Priorities
 from testrail_api._category import Suites as TR_Suites
 from testrail_api._category import Statuses as TR_Statuses
+import requests
+from requests.exceptions import ConnectionError
 from pandas import DataFrame
 import pandas as pd
 
-limit = 250
+page_size = 250
+retry_total = 5
+retry_sleep = 2
 
 
-def auto_offset(limit_size):
-    def walk(f):
+def auto_offset(f):
+    def wrap(*args, **kwargs):
+        offset = 0
+        if kwargs.get('offset'):
+            assert False, 'offset has been auto managed'
+        df = f(*args, **kwargs, offset=offset)
+        data_size = df.shape[0]
+        frames = [df]
+        while data_size == page_size:
+            offset += page_size
+            df2 = f(*args, **kwargs, offset=offset)
+            data_size = df2.shape[0]
+            frames.append(df2)
+        return pd.concat(frames, sort=False)
 
-        def wrap(*args, **kwargs):
-            offset = 0
-            if kwargs.get('offset'):
-                assert False, 'offset has been auto managed'
-            df = f(*args, **kwargs, offset=offset)
-            data_size = df.shape[0]
-            frames = [df]
-            while data_size == limit_size:
-                offset += limit_size
-                df2 = f(*args, **kwargs, offset=offset)
-                data_size = df2.shape[0]
-                frames.append(df2)
-            return pd.concat(frames, sort=False)
+    return wrap
 
-        return wrap
 
-    return walk
+def retry(f):
+    """
+    Handle requests.exceptions.ConnectionError by establishing new connection
+    :return: wrapper function
+    """
+    def wrap(*args, **kwargs):
+        trial = retry_total
+        while trial > 0:
+            try:
+                return f(*args, **kwargs)
+            except ConnectionError:
+                sf = args[0]
+                auth = sf.__session.auth
+                verify = sf.__session.verify
+                sf.__session = requests.Session()
+                sf.__session.headers["User-Agent"] = sf._user_agent
+                sf.__session.headers.update(kwargs.get("headers", {}))
+                sf.__session.verify = verify
+                sf.__session.auth = auth
+                trial -= 1
+                if trial == 0:
+                    raise
+                time.sleep(retry_sleep)
+                continue
+
+    return wrap
 
 
 def fill_custom_fields(project_id: int, df: DataFrame, lookup_case_field: dict):
@@ -64,7 +93,7 @@ def fill_custom_fields(project_id: int, df: DataFrame, lookup_case_field: dict):
 
 class Runs(TR_Runs):
 
-    @auto_offset(limit)
+    @auto_offset
     def to_dataframe(self, project_id: int, **kwargs) -> DataFrame:
         return DataFrame(self.get_runs(project_id, **kwargs))
 
@@ -77,7 +106,7 @@ class Runs(TR_Runs):
 
 class Plans(TR_Plans):
 
-    @auto_offset(limit)
+    @auto_offset
     def to_dataframe(self, project_id: int, **kwargs) -> DataFrame:
         return DataFrame(self.get_plans(project_id, **kwargs))
 
@@ -211,15 +240,19 @@ class Priorities(TR_Priorities):
 
 class Results(TR_Results):
 
-    @auto_offset(limit)
+    @retry
+    def get_results_for_run(self, run_id: int, limit: int = 250, offset: int = 0, **kwargs):
+        return super().get_results_for_run(run_id, limit, offset, **kwargs)
+
+    @auto_offset
     def dataframe_from_case(self, run_id: int, case_id: int, **kwargs) -> DataFrame:
         return DataFrame(self.get_results_for_case(run_id, case_id, **kwargs))
 
-    @auto_offset(limit)
+    @auto_offset
     def dataframe_from_test(self, test_id: int, **kwargs) -> DataFrame:
         return DataFrame(self.get_results(test_id, **kwargs))
 
-    @auto_offset(limit)
+    @auto_offset
     def dataframe_from_run(self, run_id: int, **kwargs) -> DataFrame:
         print(run_id, kwargs)
         return DataFrame(self.get_results_for_run(run_id, **kwargs))
