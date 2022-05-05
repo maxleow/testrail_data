@@ -1,3 +1,4 @@
+import requests
 from testrail_api import TestRailAPI as TRApi
 from testrail_data._category import (
     Runs,
@@ -13,6 +14,7 @@ from testrail_data._category import (
     Suites,
     Statuses,
     Tests,
+    Metas,
 )
 
 
@@ -72,3 +74,7 @@ class TestRailAPI(TRApi):
     @property
     def tests(self) -> Tests:
         return Tests(self)
+
+    @property
+    def metas(self) -> Metas:
+        return Metas(self)

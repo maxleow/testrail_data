@@ -1,5 +1,7 @@
 import time
-from testrail_api._category import Runs as TR_Runs
+from typing import Optional
+
+from testrail_api._category import Runs as TR_Runs, _MetaCategory
 from testrail_api._category import Plans as TR_Plans
 from testrail_api._category import Results as TR_Results
 from testrail_api._category import Milestones as TR_Milestone
@@ -12,7 +14,6 @@ from testrail_api._category import CaseTypes as TR_CaseType
 from testrail_api._category import Priorities as TR_Priorities
 from testrail_api._category import Suites as TR_Suites
 from testrail_api._category import Statuses as TR_Statuses
-import requests
 from requests.exceptions import ConnectionError
 from pandas import DataFrame
 import pandas as pd
@@ -27,12 +28,24 @@ def auto_offset(f):
         offset = 0
         if kwargs.get('offset'):
             assert False, 'offset has been auto managed'
-        df = f(*args, **kwargs, offset=offset)
+
+        def auto_reset_connection(*args, **kwargs):
+            trial = retry_total
+            while trial > 0:
+                try:
+                    return f(*args, **kwargs)
+                except ConnectionError:
+                    trial -= 1
+                    if trial == 0:
+                        raise
+                    time.sleep(retry_sleep)
+                    continue
+        df = auto_reset_connection(*args, **kwargs, offset=offset)
         data_size = df.shape[0]
         frames = [df]
         while data_size == page_size:
             offset += page_size
-            df2 = f(*args, **kwargs, offset=offset)
+            df2 = auto_reset_connection(*args, **kwargs, offset=offset)
             data_size = df2.shape[0]
             frames.append(df2)
         return pd.concat(frames, sort=False)
@@ -40,156 +53,383 @@ def auto_offset(f):
     return wrap
 
 
-def retry(f):
-    """
-    Handle requests.exceptions.ConnectionError by establishing new connection
-    :return: wrapper function
-    """
-    def wrap(*args, **kwargs):
-        trial = retry_total
-        while trial > 0:
+class Metas(_MetaCategory):
+
+    def fill_custom_fields(self, project_id: int, df: DataFrame):
+        """
+        A helper to resolve meta data fill up for custom-columns
+        :param project_id:
+            The ID of the project
+        :param df:
+            Dataframe contains custom-columns
+        :return:
+        """
+        lookup_case_field = CaseFields(self._session).get_configs()
+
+        def fill(x, column):
             try:
-                return f(*args, **kwargs)
-            except ConnectionError:
-                sf = args[0]
-                auth = sf.__session.auth
-                verify = sf.__session.verify
-                sf.__session = requests.Session()
-                sf.__session.headers["User-Agent"] = sf._user_agent
-                sf.__session.headers.update(kwargs.get("headers", {}))
-                sf.__session.verify = verify
-                sf.__session.auth = auth
-                trial -= 1
-                if trial == 0:
-                    raise
-                time.sleep(retry_sleep)
-                continue
+                def list_type(y):
+                    y = [i for i in y if i != 0]
+                    labels = [lookup_custom_field[project_id][i] for i in y]
+                    return ','.join(labels)
 
-    return wrap
-
-
-def fill_custom_fields(project_id: int, df: DataFrame, lookup_case_field: dict):
-    def fill(x, column):
-        try:
-            lookup_custom_field = lookup_case_field[column]
-            if not x or project_id not in lookup_custom_field:
-                return ''
-            elif isinstance(x, list):
-                labels = [lookup_custom_field[project_id][i] for i in x]
-                return ','.join(labels)
-            elif isinstance(x, float) or str(x).isnumeric():
-                if str(x) == 'nan':
+                lookup_custom_field = lookup_case_field[column]
+                if not x or project_id not in lookup_custom_field:
                     return ''
-                x = int(x)
+                elif isinstance(x, str) and isinstance(eval(x), list):
+                    return list_type(eval(x))
+                elif isinstance(x, list):
+                    return list_type(x)
+                elif isinstance(x, float) or str(x).isnumeric():
+                    if str(x) == 'nan':
+                        return ''
+                    x = int(x)
+                    return lookup_custom_field[project_id][x]
                 return lookup_custom_field[project_id][x]
-            return lookup_custom_field[project_id][x]
-        except KeyError:
-            print(column, x, type(x))
-            return f'UNKNOWN {x}'
+            except KeyError:
+                print(column, x, type(x))
+                return f'UNKNOWN {x}'
 
-    for col in [c for c in df.columns if 'custom_' in c]:
-        df[col] = df[col].apply(fill, column=col)
+        for col in [c for c in df.columns if 'custom_' in c]:
+            df[col] = df[col].apply(fill, column=col)
+
+    def fill_id_fields(self, project_id: int, suite_id: int, df: DataFrame):
+        """
+        A helper to resolve meta data fill up for Ids columns
+        :param project_id:
+            The ID of the project
+        :param suite_id:
+            The ID of the test suite (optional if the project is operating in
+            single suite mode)
+        :param df:
+            Dataframe contains custom-columns
+        :return:
+        """
+        def lookup_wrapper(key, lookup: dict):
+            try:
+                return lookup[key]
+            except KeyError:
+                return f"UNKNOWN {key}"
+
+        if 'section_id' in df.columns:
+            lookup_section = Sections(self._session).get_sections_lookup(project_id, suite_id)
+            df['section_name'] = df['section_id'].apply(lookup_wrapper, lookup=lookup_section)
+        if 'template_id' in df.columns:
+            lookup_template = Template(self._session).get_template_lookup(project_id)
+            df['template_name'] = df['template_id'].apply(lookup_wrapper, lookup=lookup_template)
+        if 'type_id' in df.columns:
+            lookup_case_type = CaseTypes(self._session).get_case_types_lookup()
+            df['type_name'] = df['type_id'].apply(lookup_wrapper, lookup=lookup_case_type)
+        if 'priority_id' in df.columns:
+            lookup_priority = Priorities(self._session).get_priorities_lookup()
+            df['priority_name'] = df['priority_id'].apply(lookup_wrapper, lookup=lookup_priority)
+        if 'suite_id' in df.columns:
+            lookup_suite = Suites(self._session).get_suites_lookup(project_id)
+            df['suite_name'] = df['suite_id'].apply(lookup_wrapper, lookup=lookup_suite)
 
 
 class Runs(TR_Runs):
+    def get_runs_by_milestone(
+            self,
+            *milestone_ids: int,
+            project_id: int,
+            include_plan=False
+    ) -> DataFrame:
+        """
+        Returns a list of run on an existing milestones.
+        :param milestone_ids
+        :param project_id
+            The ID of the project
+        :param include_plan:
+            True to retrieve all runs under each plan if there are any.
+        :return: response
+        """
+        dfs = []
+        for mid in milestone_ids:
+            df_run1 = self.to_dataframe(project_id=project_id, milestone_id=mid)
+            if include_plan:
+                plans = Plans(self._session).get_plans(project_id=project_id, milestone_id=mid)
+                plan_ids = [plan['id'] for plan in plans]
+                df_run2 = self.dataframe_from_plan(*plan_ids)
+                dfs.append(pd.concat([df_run1, df_run2]))
+            else:
+                dfs.append(df_run1)
+        return pd.concat(dfs).reset_index(drop=False)
+
+    def get_runs_by_plan(self, *plan_ids: int) -> list:
+        """
+        Returns a list of run on an existing test plan.
+
+        :param plan_ids:
+            The ID or IDs of the test plan
+        :return: response
+        """
+        entries = [Plans(self._session).get_plan(plan_id)['entries'] for plan_id in plan_ids]
+        return [x3 for x0 in entries for x1 in x0 for x3 in x1['runs']]
 
     @auto_offset
     def to_dataframe(self, project_id: int, **kwargs) -> DataFrame:
+        """
+        Returns a List of test runs for a project as DataFrame. Only returns those test runs that
+        are not part of a test plan (please see get_plans/get_plan for this).
+
+        :param project_id: int
+            The ID of the project
+        :param kwargs: filters
+            :key created_after: int/datetime
+                Only return test runs created after this date (as UNIX timestamp).
+            :key created_before: int/datetime
+                Only return test runs created before this date (as UNIX timestamp).
+            :key created_by: List[int] or comma-separated string
+                A comma-separated list of creators (user IDs) to filter by.
+            :key is_completed: int/bool
+                1/True to return completed test runs only.
+                0/False to return active test runs only.
+            :key limit/offset: int
+                Limit the result to :limit test runs. Use :offset to skip records.
+            :key milestone_id: List[int] or comma-separated string
+                A comma-separated list of milestone IDs to filter by.
+            :key refs_filter: str
+                A single Reference ID (e.g. TR-a, 4291, etc.)
+            :key suite_id: List[int] or comma-separated string
+                A comma-separated list of test suite IDs to filter by.
+        :return: response`
+        """
         return DataFrame(self.get_runs(project_id, **kwargs))
 
-    def dataframe_from_plan(self, plan_id: int) -> DataFrame:
-        plan = Plans(self._session).get_plan(plan_id)
-        entries = plan['entries']
-        runs = [run for entry in entries for run in entry['runs']]
-        return pd.DataFrame(runs)
+    def dataframe_from_plan(self, *plan_ids: int) -> DataFrame:
+        """
+        Returns a list of run on an existing test plan as Dataframe
+
+        :param plan_ids:
+            The ID or IDs of the test plan
+        :return: response
+        """
+        return pd.DataFrame(self.get_runs_by_plan(*plan_ids))
 
 
 class Plans(TR_Plans):
 
     @auto_offset
     def to_dataframe(self, project_id: int, **kwargs) -> DataFrame:
+        """
+        Returns a list of test plans for a project in DataFrame
+
+        This method will return all entries in the response array.
+        To retrieve additional entries, you can make additional requests
+        using the offset filter described in the Request filters section below.
+
+        :param project_id:
+            The ID of the project
+        :param kwargs: filters
+            :key created_after: int/datetime
+                Only return test plans created after this date (as UNIX timestamp).
+            :key created_before: int/datetime
+                Only return test plans created before this date (as UNIX timestamp).
+            :key created_by: List[int] or comma-separated string
+                A comma-separated list of creators (user IDs) to filter by.
+            :key is_completed: int/bool
+                1/True to return completed test plans only.
+                0/False to return active test plans only.
+            :key limit/offset: int
+                Limit the result to :limit test plans. Use :offset to skip records.
+            :key milestone_id: List[int] or comma-separated string
+                A comma-separated list of milestone IDs to filter by.
+        :return: response
+        """
         return DataFrame(self.get_plans(project_id, **kwargs))
 
 
 class Cases(TR_Cases):
+
     def to_dataframe(self, project_id: int, suite_id: int, with_meta=False, **kwargs):
+        """
+        Returns a list of test cases for a project or specific test suite in DataFrame
+        (if the project has multiple suites enabled).
+
+        :param project_id:
+            The ID of the project
+        :param suite_id: int
+            The ID of the test suite (optional if the project is operating in
+            single suite mode)
+        :param with_meta: boolean
+            ID's field will be filled up with new columns
+        :param kwargs:
+            :key created_after: int/datetime
+                Only return test cases created after this date (as UNIX timestamp).
+            :key created_before: int/datetime
+                Only return test cases created before this date (as UNIX timestamp).
+            :key created_by: List[int] or comma-separated string
+                A comma-separated list of creators (user IDs) to filter by.
+            :key filter: str
+                Only return cases with matching filter string in the case title
+            :key limit: int
+                The number of test cases the response should return
+                (The response size is 250 by default) (requires TestRail 6.7 or later)
+            :key milestone_id: List[int] or comma-separated string
+                A comma-separated list of milestone IDs to filter by (not available
+                if the milestone field is disabled for the project).
+            :key offset: int
+                Where to start counting the tests cases from (the offset)
+                (requires TestRail 6.7 or later)
+            :key priority_id: List[int] or comma-separated string
+                A comma-separated list of priority IDs to filter by.
+            :key refs: str
+                A single Reference ID (e.g. TR-1, 4291, etc.)
+                (requires TestRail 6.5.2 or later)
+            :key section_id: int
+                The ID of a test case section
+            :key template_id: List[int] or comma-separated string
+                A comma-separated list of template IDs to filter by
+                (requires TestRail 5.2 or later)
+            :key type_id: List[int] or comma-separated string
+                A comma-separated list of case type IDs to filter by.
+            :key updated_after: int/datetime
+                Only return test cases updated after this date (as UNIX timestamp).
+            :key updated_before: int/datetime
+                Only return test cases updated before this date (as UNIX timestamp).
+            :key updated_by: List[int] or comma-separated string
+                A comma-separated list of user IDs who updated test cases to filter by.
+        :return: DataFrame
+        """
         df = DataFrame(self.get_cases(project_id, suite_id=suite_id, **kwargs))
         if with_meta:
-            lookup_section = Sections(self._session).get_sections_lookup(project_id, suite_id)
-            df['section_name'] = df['section_id'].apply(lambda x: lookup_section[x])
-
-            lookup_template = Template(self._session).get_template_lookup(project_id)
-            df['template_name'] = df['template_id'].apply(lambda x: lookup_template[x])
-
-            lookup_case_type = CaseTypes(self._session).get_case_types_lookup()
-            df['type_name'] = df['type_id'].apply(lambda x: lookup_case_type[x])
-
-            lookup_priority = Priorities(self._session).get_priorities_lookup()
-            df['priority_name'] = df['priority_id'].apply(lambda x: lookup_priority[x])
-
-            lookup_suite = Suites(self._session).get_suites_lookup(project_id)
-            df['suite_name'] = df['suite_id'].apply(lambda x: lookup_suite[x])
-
-            lookup_case_field = CaseFields(self._session).get_configs()
-            fill_custom_fields(project_id, df, lookup_case_field)
-
+            meta = Metas(self._session)
+            meta.fill_id_fields(project_id, suite_id, df)
+            meta.fill_custom_fields(project_id, df)
         return df
 
 
 class Tests(TR_Tests):
-    def to_dataframe(self, run_id: int, with_meta=False, **kwargs) -> DataFrame:
-        df = DataFrame(self.get_tests(run_id, **kwargs))
-        run = Runs(self._session).get_run(run_id)
-        project_id = run['project_id']
-        if with_meta:
-            lookup_template = Template(self._session).get_template_lookup(project_id)
-            df['template_name'] = df['template_id'].apply(lambda x: lookup_template[x])
+    def to_dataframe(self, *run_ids: int, with_meta=False, **kwargs) -> Optional[DataFrame]:
+        """
+        Returns single or multiple test run.
 
-            lookup_case_type = CaseTypes(self._session).get_case_types_lookup()
-            df['type_name'] = df['type_id'].apply(lambda x: lookup_case_type[x])
+        :param run_ids:
+             The ID or IDs of the test run(s)
+        :param with_meta:
+            True to fill up template_id, type_id, priority_id with their respective name
+        :param kwargs:
+        :return: DataFrame
 
-            lookup_priority = Priorities(self._session).get_priorities_lookup()
-            df['priority_name'] = df['priority_id'].apply(lambda x: lookup_priority[x])
+        Examples
+        --------
+        #> run_ids = [2,3,4]
+        #> df = api.tests.to_dataframe(*run_ids, with_meta=True)
 
-            lookup_case_field = CaseFields(self._session).get_configs()
-            fill_custom_fields(project_id, df, lookup_case_field)
-        return df
+        OR
+        #> df = api.tests.to_dataframe(2,3,4, with_meta=True)
+        """
+        dfs = []
+        for run_id in run_ids:
+            df = DataFrame(self.get_tests(run_id, **kwargs))
+            run = Runs(self._session).get_run(run_id)
+            project_id = run['project_id']
+            if with_meta:
+                meta = Metas(self._session)
+                meta.fill_id_fields(project_id, 0, df)
+                meta.fill_custom_fields(project_id, df)
+            dfs.append(df)
+        return pd.concat(dfs).reset_index(drop=True) if dfs else None
 
 
 class Milestones(TR_Milestone):
+    def get_sub_milestones(self, *milestone_ids) -> list:
+        """
+        Returns sub milestones of a milestone if any.
 
-    def get_sub_milestones(self, milestone_id: int) -> dict:
-        sub_mile = self.get_milestone(milestone_id)['milestones']
-        for mile in sub_mile:
-            sub_mile.extend(
-                self.get_sub_milestones(mile['id'])
-            )
-        return sub_mile
+        :param milestone_ids:
+            The ID or IDs of the milestone
+        :return: response
+        """
+        subs = [self.get_milestone(mid)['milestones'] for mid in milestone_ids]
+        return [sub0 for sub in subs for sub0 in sub]
 
-    def sub_milestones_to_dataframe(self, milestone_id: int):
-        return DataFrame(self.get_sub_milestones(milestone_id))
+    def sub_milestones_to_dataframe(self, *milestone_ids: int) -> DataFrame:
+        """
+        Returns sub milestones of a milestone if any in a DataFrame.
+
+        :param milestone_ids:
+            The ID or IDs of the milestone
+        :return: response
+        """
+        return DataFrame(self.get_sub_milestones(*milestone_ids))
 
 
 class Sections(TR_Sections):
     def to_dataframe(self, project_id: int, suite_id: int, **kwargs) -> DataFrame:
+        """
+         Returns a list of sections for a project and test suite in DataFrame
+
+        :param project_id:
+            The ID of the project
+        :param suite_id:
+            The ID of the test suite
+        :param kwargs:
+            :key offset: int
+                Where to start counting the sections from (the offset)
+                (requires TestRail 6.7 or later)
+        :return:
+        """
         return DataFrame(self.get_sections(project_id=project_id, suite_id=suite_id, **kwargs))
 
     def get_sections_lookup(self, project_id: int, suite_id: int) -> dict:
+        """
+         Returns a lookup map for each sections as follow:
+
+         {
+            <SECTION_ID>: <SECTION_NAME>
+            ...
+         }
+
+        :param project_id:
+            The ID of the project
+        :param suite_id:
+            The ID of the test suite
+        :return:
+        """
         df = self.to_dataframe(project_id, suite_id)
         return dict(zip(df['id'], df['name']))
 
 
 class Template(TR_Template):
     def to_dataframe(self, project_id: int) -> DataFrame:
+        """
+        Returns a list of available templates (requires TestRail 5.2 or later) in DataFrame
+
+        :param project_id:
+            The ID of the project
+        :return:
+        """
         return pd.DataFrame(self.get_templates(project_id))
 
     def get_template_lookup(self, project_id: int) -> dict:
+        """
+        Returns a lookup map for each templates as follow:
+
+         {
+            <TEMPLATE_ID>: <TEMPLATE_NAME>
+            ...
+         }
+        :param project_id:
+            The ID of the project
+        :return:
+        """
         df = self.to_dataframe(project_id)
         return dict(zip(df['id'], df['name']))
 
 
 class CaseFields(TR_CaseFields):
     def get_configs(self) -> dict:
+        """
+        Return a map for case field with following structure:
+
+        {
+            {<SYSTEM_NAME>: {<PROJECT_ID>: {<TYPE_ID>: <VALUE>}}
+        }
+
+        :return:
+        """
         df = DataFrame(self.get_case_fields()).filter(['system_name', 'configs'])
 
         def get_df_by_system_name(name: str):
@@ -240,7 +480,6 @@ class Priorities(TR_Priorities):
 
 class Results(TR_Results):
 
-    @retry
     def get_results_for_run(self, run_id: int, limit: int = 250, offset: int = 0, **kwargs):
         return super().get_results_for_run(run_id, limit, offset, **kwargs)
 
@@ -254,13 +493,11 @@ class Results(TR_Results):
 
     @auto_offset
     def dataframe_from_run(self, run_id: int, **kwargs) -> DataFrame:
-        print(run_id, kwargs)
         return DataFrame(self.get_results_for_run(run_id, **kwargs))
 
     def dataframe_from_milestone(self, project_id: int, milestone_id: int, **kwargs):
         df_runs = Runs(self._session).to_dataframe(
             project_id=project_id, milestone_id=milestone_id)
-        print(df_runs)
         results = [self.dataframe_from_run(run_id, **kwargs) for run_id in df_runs['id'].to_list()]
         return pd.concat(results, sort=False)
 
