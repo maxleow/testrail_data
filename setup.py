@@ -6,10 +6,10 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setuptools.setup(
     name="testrail-data",
     version="0.0.6",
-    # install_requires=[
-    #     "pandas",
-    #     "testrail-api>=1.10",
-    # ],
+    install_requires=[
+        "pandas",
+        "testrail-api>=1.10",
+    ],
     author="Max Leow",
     author_email="maxengiu@outlook.com",
     description="Pandas DataFrame integrated API wrapper for Testrail",
