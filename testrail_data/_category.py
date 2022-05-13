@@ -1,6 +1,6 @@
 import time
 from typing import Optional
-
+import functools
 from testrail_api._category import Runs as TR_Runs, _MetaCategory
 from testrail_api._category import Plans as TR_Plans
 from testrail_api._category import Results as TR_Results
@@ -24,6 +24,7 @@ retry_sleep = 2
 
 
 def auto_offset(f):
+    @functools.wraps(f)
     def wrap(*args, **kwargs):
         offset = 0
         if kwargs.get('offset'):
@@ -480,26 +481,109 @@ class Priorities(TR_Priorities):
 
 class Results(TR_Results):
 
-    def get_results_for_run(self, run_id: int, limit: int = 250, offset: int = 0, **kwargs):
-        return super().get_results_for_run(run_id, limit, offset, **kwargs)
-
     @auto_offset
     def dataframe_from_case(self, run_id: int, case_id: int, **kwargs) -> DataFrame:
         return DataFrame(self.get_results_for_case(run_id, case_id, **kwargs))
 
     @auto_offset
     def dataframe_from_test(self, test_id: int, **kwargs) -> DataFrame:
+        """
+        Returns a list of test results for a test as DataFrame
+
+        :param test_id:
+            The ID of the test
+        :param limit:
+            Number that sets the limit of test results to be shown on the response
+            (Optional parameter. The response size limit is 250 by default)
+            (requires TestRail 6.7 or later)
+        :param offset:
+            Number that sets the position where the response should start from
+            (Optional parameter) (requires TestRail 6.7 or later)
+        :param kwargs: filters
+            :key defects_filter: str
+                A single Defect ID (e.g. TR-1, 4291, etc.)
+            :key status_id: List[int] or comma-separated string
+                A comma-separated list of status IDs to filter by.
+        :return: DataFrame
+        """
         return DataFrame(self.get_results(test_id, **kwargs))
 
     @auto_offset
     def dataframe_from_run(self, run_id: int, **kwargs) -> DataFrame:
+        """
+        Returns a list of test results for a test run.
+        This method will return up to all entries in the response array.
+
+        :param run_ids:
+            The ID of the test run
+        :param kwargs: filters
+            :key created_after: int/datetime
+                Only return test results created after this date.
+            :key created_before: int/datetime
+                Only return test results created before this date.
+            :key created_by: List[int] or comma-separated string
+                A comma-separated list of creators (user IDs) to filter by.
+            :key defects_filter: str
+                A single Defect ID (e.g. TR-1, 4291, etc.)
+            :key status_id: List[int] or comma-separated string
+                A comma-separated list of status IDs to filter by.
+        :return: DataFrame
+        """
         return DataFrame(self.get_results_for_run(run_id, **kwargs))
 
-    def dataframe_from_milestone(self, project_id: int, milestone_id: int, **kwargs):
-        df_runs = Runs(self._session).to_dataframe(
-            project_id=project_id, milestone_id=milestone_id)
-        results = [self.dataframe_from_run(run_id, **kwargs) for run_id in df_runs['id'].to_list()]
-        return pd.concat(results, sort=False)
+    def dataframe_from_runs(self, *run_ids: int, **kwargs) -> DataFrame:
+        """
+        Returns a list of test results for one or many test runs.
+        This method will return up to all entries in the response array.
+
+        :param run_ids:
+            The ID or IDs of the test run(s)
+        :param kwargs: filters
+            :key created_after: int/datetime
+                Only return test results created after this date.
+            :key created_before: int/datetime
+                Only return test results created before this date.
+            :key created_by: List[int] or comma-separated string
+                A comma-separated list of creators (user IDs) to filter by.
+            :key defects_filter: str
+                A single Defect ID (e.g. TR-1, 4291, etc.)
+            :key status_id: List[int] or comma-separated string
+                A comma-separated list of status IDs to filter by.
+        :return: DataFrame
+        """
+        dfs = [self.dataframe_from_run(run_id) for run_id in run_ids]
+        return pd.concat(dfs).reset_index(drop=True) if dfs else None
+
+
+    def dataframe_from_milestone(self, project_id: int, *milestone_ids: int, **kwargs) -> DataFrame:
+        """
+        Returns a list of test results from milestone(s) which contains run(s).
+        This method will return up to all entries in the response array.
+
+        :param project_id:
+            The ID of the project
+        :param *milestone_id:
+            The ID or IDs of the milestone(s)
+        :param kwargs: filters
+            :key created_after: int/datetime
+                Only return test results created after this date.
+            :key created_before: int/datetime
+                Only return test results created before this date.
+            :key created_by: List[int] or comma-separated string
+                A comma-separated list of creators (user IDs) to filter by.
+            :key defects_filter: str
+                A single Defect ID (e.g. TR-1, 4291, etc.)
+            :key status_id: List[int] or comma-separated string
+                A comma-separated list of status IDs to filter by.
+        :return:
+        """
+        results = []
+        for milestone_id in milestone_ids:
+            df_runs = Runs(self._session).to_dataframe(
+                project_id=project_id, milestone_id=milestone_id)
+            _ = [results.append(self.dataframe_from_run(run_id, **kwargs))
+                       for run_id in df_runs['id'].to_list()]
+        return pd.concat(results).reset_index(drop=True) if results else None
 
 
 class Suites(TR_Suites):
