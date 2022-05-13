@@ -70,11 +70,25 @@ df_run = api.runs.dataframe_from_plan(plan_id=3)
 
 ```python
 # continue ...
+from testrail_data import TestRailAPI
 
+api = TestRailAPI()
 df_case = api.cases.to_dataframe(project_id=1, suite_id=2, with_meta=True)
 # Additional name-columns created base on 
 # section_id, template_id, type_id, priority_id, suite_id
 # all custom_columns are replaced with meta data.
+
+```
+
+### Example query all results from multiple runs
+
+```python
+from testrail_data import TestRailAPI
+
+api = TestRailAPI()
+run_ids = [1,2,3,4]
+
+df_run = api.results.dataframe_from_runs(*run_ids)
 
 ```
 
