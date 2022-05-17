@@ -24,23 +24,30 @@ retry_sleep = 2
 
 
 def auto_offset(f):
+    """
+    A decorator to work with pagination and connection error retry.
+
+    :param f:
+    :return:
+    """
     @functools.wraps(f)
     def wrap(*args, **kwargs):
         offset = 0
         if kwargs.get('offset'):
             assert False, 'offset has been auto managed'
 
-        def auto_reset_connection(*args, **kwargs):
+        def auto_reset_connection(*_args, **_kwargs):
             trial = retry_total
             while trial > 0:
                 try:
-                    return f(*args, **kwargs)
+                    return f(*_args, **_kwargs)
                 except ConnectionError:
                     trial -= 1
                     if trial == 0:
                         raise
                     time.sleep(retry_sleep)
                     continue
+
         df = auto_reset_connection(*args, **kwargs, offset=offset)
         data_size = df.shape[0]
         frames = [df]
@@ -56,13 +63,18 @@ def auto_offset(f):
 
 class Metas(_MetaCategory):
 
-    def fill_custom_fields(self, project_id: int, df: DataFrame):
+    def fill_custom_fields(self, project_id: int, df: DataFrame, warning=False):
         """
-        A helper to resolve meta data fill up for custom-columns
+        A helper to resolve metadata fill up for custom-columns.
+        Unmatched columns is assigned with `UNKNOWN <config_id>`.
+
         :param project_id:
             The ID of the project
         :param df:
             Dataframe contains custom-columns
+        :param warning:
+            False to turn off warning for unmatched columns, True is otherwise.
+
         :return:
         """
         lookup_case_field = CaseFields(self._session).get_configs()
@@ -88,7 +100,8 @@ class Metas(_MetaCategory):
                     return lookup_custom_field[project_id][x]
                 return lookup_custom_field[project_id][x]
             except KeyError:
-                print(column, x, type(x))
+                if warning:
+                    print(column, x, type(x))
                 return f'UNKNOWN {x}'
 
         for col in [c for c in df.columns if 'custom_' in c]:
@@ -96,7 +109,7 @@ class Metas(_MetaCategory):
 
     def fill_id_fields(self, project_id: int, suite_id: int, df: DataFrame):
         """
-        A helper to resolve meta data fill up for Ids columns
+        A helper to resolve metadata fill up for Ids columns
         :param project_id:
             The ID of the project
         :param suite_id:
@@ -106,6 +119,7 @@ class Metas(_MetaCategory):
             Dataframe contains custom-columns
         :return:
         """
+
         def lookup_wrapper(key, lookup: dict):
             try:
                 return lookup[key]
@@ -133,35 +147,43 @@ class Runs(TR_Runs):
     def get_runs_by_milestone(
             self,
             *milestone_ids: int,
-            project_id: int,
-            include_plan=False
+            project_id: int
     ) -> DataFrame:
         """
-        Returns a list of run on an existing milestones.
-        :param milestone_ids
-        :param project_id
+        Returns a list of run on an existing milestones,
+        including those runs in sub-milestones and plans.
+
+        :param milestone_ids:
+        :param project_id:
             The ID of the project
-        :param include_plan:
-            True to retrieve all runs under each plan if there are any.
-        :return: response
+        :return: DataFrame
         """
-        dfs = []
-        for mid in milestone_ids:
-            df_run1 = self.to_dataframe(project_id=project_id, milestone_id=mid)
-            if include_plan:
+        def get_runs(*mile_ids):
+            dataframes = []
+            for mid in mile_ids:
+                # Get all run
+                df_run1 = self.to_dataframe(project_id=project_id, milestone_id=mid)
+                if df_run1.shape[0] > 0:
+                    dataframes.append(df_run1)
+                # Get all plan
                 plans = Plans(self._session).get_plans(project_id=project_id, milestone_id=mid)
                 plan_ids = [plan['id'] for plan in plans]
                 df_run2 = self.dataframe_from_plan(*plan_ids)
-                dfs.append(pd.concat([df_run1, df_run2]))
-            else:
-                dfs.append(df_run1)
+                if df_run2.shape[0] > 0:
+                    dataframes.append(df_run2)
+            return dataframes
+
+        dfs = get_runs(milestone_ids)
+        milestone = Milestones(self._session)
+        df_milestone = milestone.sub_milestones_to_dataframe(*milestone_ids).filter(['id'])
+        dfs.extend(get_runs(*df_milestone['id'].to_list()))
         return pd.concat(dfs).reset_index(drop=False)
 
     def get_runs_by_plan(self, *plan_ids: int) -> list:
         """
         Returns a list of run on an existing test plan.
 
-        :param plan_ids:
+        param plan_ids:
             The ID or IDs of the test plan
         :return: response
         """
@@ -172,7 +194,7 @@ class Runs(TR_Runs):
     def to_dataframe(self, project_id: int, **kwargs) -> DataFrame:
         """
         Returns a List of test runs for a project as DataFrame. Only returns those test runs that
-        are not part of a test plan (please see get_plans/get_plan for this).
+        are not part of a test plan (please see get_plans/get_plan for this)
 
         :param project_id: int
             The ID of the project
@@ -194,7 +216,7 @@ class Runs(TR_Runs):
                 A single Reference ID (e.g. TR-a, 4291, etc.)
             :key suite_id: List[int] or comma-separated string
                 A comma-separated list of test suite IDs to filter by.
-        :return: response`
+        :return: DataFrame
         """
         return DataFrame(self.get_runs(project_id, **kwargs))
 
@@ -406,7 +428,7 @@ class Template(TR_Template):
 
     def get_template_lookup(self, project_id: int) -> dict:
         """
-        Returns a lookup map for each templates as follow:
+        Returns a lookup map for each template as follow:
 
          {
             <TEMPLATE_ID>: <TEMPLATE_NAME>
@@ -463,9 +485,22 @@ class CaseFields(TR_CaseFields):
 
 class CaseTypes(TR_CaseType):
     def to_dataframe(self) -> DataFrame:
+        """
+        Returns a list of available case types.
+
+        The response includes an array of test case types.
+        Each case type has a unique ID and a name.
+        The is_default field is true for the default case type and false otherwise.
+
+        :return: DataFrame
+        """
         return DataFrame(self.get_case_types())
 
     def get_case_types_lookup(self) -> dict:
+        """
+        Return a dictionary which mapped with `id` and `name`
+        :return:
+        """
         df = self.to_dataframe()
         return dict(zip(df['id'], df['name']))
 
@@ -483,6 +518,24 @@ class Results(TR_Results):
 
     @auto_offset
     def dataframe_from_case(self, run_id: int, case_id: int, **kwargs) -> DataFrame:
+        """
+        Returns a list of test results for a test run and case combination in Dataframe
+
+        :param run_id:
+            The ID of the test run
+        :param case_id:
+            The ID of the test case
+        :param kwargs:
+            :key offset: int
+                unsupported due to reserve for auto pagination feature
+            :key limit: int
+                unsupported due to reserve for auto pagination feature
+            :key defects_filter: str
+                A single Defect ID (e.g. TR-1, 4291, etc.)
+            :key status_id: List[int] or comma-separated string
+                A comma-separated list of status IDs to filter by.
+        :return: DataFrame
+        """
         return DataFrame(self.get_results_for_case(run_id, case_id, **kwargs))
 
     @auto_offset
@@ -492,13 +545,6 @@ class Results(TR_Results):
 
         :param test_id:
             The ID of the test
-        :param limit:
-            Number that sets the limit of test results to be shown on the response
-            (Optional parameter. The response size limit is 250 by default)
-            (requires TestRail 6.7 or later)
-        :param offset:
-            Number that sets the position where the response should start from
-            (Optional parameter) (requires TestRail 6.7 or later)
         :param kwargs: filters
             :key defects_filter: str
                 A single Defect ID (e.g. TR-1, 4291, etc.)
@@ -514,7 +560,7 @@ class Results(TR_Results):
         Returns a list of test results for a test run.
         This method will return up to all entries in the response array.
 
-        :param run_ids:
+        :param run_id:
             The ID of the test run
         :param kwargs: filters
             :key created_after: int/datetime
@@ -551,9 +597,8 @@ class Results(TR_Results):
                 A comma-separated list of status IDs to filter by.
         :return: DataFrame
         """
-        dfs = [self.dataframe_from_run(run_id) for run_id in run_ids]
+        dfs = [self.dataframe_from_run(run_id, **kwargs) for run_id in run_ids]
         return pd.concat(dfs).reset_index(drop=True) if dfs else None
-
 
     def dataframe_from_milestone(self, project_id: int, *milestone_ids: int, **kwargs) -> DataFrame:
         """
@@ -562,7 +607,7 @@ class Results(TR_Results):
 
         :param project_id:
             The ID of the project
-        :param *milestone_id:
+        :param milestone_ids:
             The ID or IDs of the milestone(s)
         :param kwargs: filters
             :key created_after: int/datetime
@@ -582,23 +627,57 @@ class Results(TR_Results):
             df_runs = Runs(self._session).to_dataframe(
                 project_id=project_id, milestone_id=milestone_id)
             _ = [results.append(self.dataframe_from_run(run_id, **kwargs))
-                       for run_id in df_runs['id'].to_list()]
+                 for run_id in df_runs['id'].to_list()]
         return pd.concat(results).reset_index(drop=True) if results else None
 
 
 class Suites(TR_Suites):
-    def to_dataframe(self, project_id: int):
+    def to_dataframe(self, project_id: int) -> DataFrame:
+        """
+        Returns a list of test suites for a project in DataFrame.
+
+        :param project_id:
+            The ID of the project
+        :return: DataFrame
+        """
         return DataFrame(self.get_suites(project_id))
 
     def get_suites_lookup(self, project_id: int) -> dict:
+        """
+        A Suite dictionary lookup per project for suite_id to suite_name mapping.
+
+        :param project_id:
+            The ID of the project
+        :return: dict
+
+        Examples
+        --------
+        {
+            1: 'suite_name1',
+            2: 'suite_name2,
+        }
+        """
         df = self.to_dataframe(project_id)
         return dict(zip(df['id'], df['name']))
 
 
 class Statuses(TR_Statuses):
     def to_dataframe(self) -> DataFrame:
+        """
+        Returns a list of available test statuses in DataFrame
+
+        :return: DataFrame
+        """
         return DataFrame(self.get_statuses())
 
     def get_statuses_lookup(self, column='name') -> dict:
+        """
+        A dictionary lookup for all statuses.
+
+        :param column:
+            Refer https://www.gurock.com/testrail/docs/api/reference/statuses/ for list of columns.
+            Default is `name`, commonly switch with `label`.
+        :return:
+        """
         df = self.to_dataframe()
         return dict(zip(df['id'], df[column]))

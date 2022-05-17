@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setuptools.setup(
     name="testrail-data",
-    version="0.0.8",
+    version="0.0.9",
     install_requires=[
         "pandas",
         "testrail-api>=1.10",

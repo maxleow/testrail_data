@@ -84,6 +84,16 @@ def test_dataframe_from_run_when_has_no_record(api, host):
 
     assert df.shape[0] == 0
 
+@responses.activate
+def test_dataframe_from_runs_when_has_no_record(api, host):
+    responses.add(
+        responses.GET,
+        '{}index.php?/api/v2/get_results_for_run/12&limit=250&offset=0'.format(host),
+        json=[], status=200)
+
+    df = api.results.dataframe_from_run(12)
+
+    assert df.shape[0] == 0
 
 @responses.activate
 def test_dataframe_from_milestone_when_has_record(api, host):
@@ -101,7 +111,7 @@ def test_dataframe_from_milestone_when_has_record(api, host):
 
     print(responses.calls)
 
-    df = api.results.dataframe_from_milestone(9,1)
+    df = api.results.dataframe_from_milestone(9, 1)
 
     assert df['status_id'][0] == 2
     assert df.shape[0] == 1
