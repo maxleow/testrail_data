@@ -172,12 +172,12 @@ class Runs(TR_Runs):
                 if df_run2.shape[0] > 0:
                     dataframes.append(df_run2)
             return dataframes
-
         dfs = get_runs(milestone_ids)
         milestone = Milestones(self._session)
         df_milestone = milestone.sub_milestones_to_dataframe(*milestone_ids).filter(['id'])
-        dfs.extend(get_runs(*df_milestone['id'].to_list()))
-        return pd.concat(dfs).reset_index(drop=False)
+        if df_milestone.shape[0] > 0:
+            dfs.extend(get_runs(*df_milestone['id'].to_list()))
+        return pd.concat(dfs).reset_index(drop=False) if dfs else pd.DataFrame()
 
     def get_runs_by_plan(self, *plan_ids: int) -> list:
         """
